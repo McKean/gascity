@@ -56,6 +56,9 @@ func (c *client) run(ctx context.Context, args ...string) (json.RawMessage, erro
 		}
 		return nil, fmt.Errorf("herdr %v: %w", args, err)
 	}
+	if len(strings.TrimSpace(string(out))) == 0 {
+		return nil, nil // success with no payload (e.g. pane send-keys / pane run)
+	}
 	var env envelope
 	if err := json.Unmarshal(out, &env); err != nil {
 		return nil, fmt.Errorf("herdr %v: decode response: %w", args, err)
