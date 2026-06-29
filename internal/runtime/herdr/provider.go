@@ -29,8 +29,12 @@ var (
 )
 
 // New builds a herdr Provider. herdrSession is the shared per-city herdr session
-// name; metaDir is a writable directory for sidecar session metadata.
+// name; metaDir is a writable directory for sidecar session metadata (a temp
+// fallback is used when empty, e.g. a city-less standalone construction).
 func New(herdrSession, metaDir string) *Provider {
+	if metaDir == "" {
+		metaDir = filepath.Join(os.TempDir(), "gc-herdr-meta", sanitize(herdrSession))
+	}
 	return &Provider{c: newClient(herdrSession), metaDir: metaDir}
 }
 
