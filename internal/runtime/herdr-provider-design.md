@@ -5,9 +5,44 @@
 tmux / ssh / k8s, selectable through the existing runtime registry. NOT a tmux replacement —
 an additive backend, piloted on low-stakes agents first.
 
-> herdr-side details below are from the published CLI + socket-API docs as fetched; "no X"
-> means *absent from the docs I read*, not proven absent — confirm each gap against a real
-> herdr build before relying on it.
+## Validated against herdr 0.7.1 (live smoke test, 2026-06-29)
+Probed the installed `herdr 0.7.1` and ran a sandboxed smoke test (isolated named session →
+`agent start` a throwaway process → exercise the verbs → cleaned up). Confirmed against reality —
+this supersedes the doc-derived guesses in the tables below.
+
+**Works now, over the JSON socket API (clean request/response):**
+- `Provider.Start` ← `herdr agent start <name> --cwd PATH --env K=V --no-focus -- <argv>`
+  (returns `pane_id`/`workspace_id`/`terminal_id`; **agents are addressable BY NAME** → 1:1 with
+  gascity sessions — cleaner than the pane-id path).
+- `IsRunning`/`ListRunning` ← `agent list` / `agent get <name>`.
+- `ProcessAlive` + the hard-kill PID ← `pane process-info` → `shell_pid` + the full foreground
+  process tree (argv/cmdline/cwd/pid). Excellent — covers both.
+- `Nudge` ← `agent send <name> <text>` (literal) or `pane run` (text+Enter); `SendKeys` ← `pane send-keys`.
+- `Peek` ← `agent read --source visible`. **CORRECTION:** `visible` = current rendered screen
+  (what `fingerprint.go` needs); `recent`/`recent-unwrapped` are **scrollback only** (returned empty
+  until lines scroll off). Full history = `recent-unwrapped` + `visible`.
+- `WaitForIdle` ← `agent wait <name> --status idle --timeout MS` (native).
+- `Attach` ← `agent attach <name> [--takeover]`.
+
+**New finding — startup ordering:** a named session's **server must be running before any
+subcommand can reach its socket** (`herdr --session <name> <cmd>` → `NotFound` otherwise). So
+`Provider.Start` must ensure the session-server is up first. Maps to `ServerLifecycleProvider.
+ConfigureServer` = own one shared herdr session-server (≈ the tmux `-L gc` server), one agent/pane
+per gascity session. (`herdr server` works headless but prints a "did you mean the TUI?" hint —
+find the blessed headless-start invocation.)
+
+**Confirmed gaps (real in 0.7.1):** no signal API (soft interrupt = `send-keys ctrl+c`; hard kill
+via process-info PID); no per-session KV (`report-metadata` is display-only + ttl) → sidecar file;
+no `ClearScrollback`; `IsAttached`/`GetLastActivity` not directly exposed (infer / best-effort).
+
+**Bonus confirmed:** native `agent_status` + `agent wait` + `report-agent` (a bare bash loop shows
+`unknown`; real agents populate via detection manifests) — the liveness-improvement upside is real,
+not just docs.
+
+---
+
+> Doc-derived mapping below (pre-validation); the tables are still accurate except where the
+> validation section above corrects them (Peek source; the first-class `agent` command).
 
 ## Why it's a clean fit
 `internal/runtime` already abstracts the multiplexer: a core `Provider` interface
