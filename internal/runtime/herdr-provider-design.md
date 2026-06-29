@@ -1,6 +1,23 @@
 # herdr as a gascity runtime provider — feasibility & interface mapping
 
-**Status:** design / feasibility (branch `feat/herdr-runtime-provider`).
+**Status:** IMPLEMENTED & conformance-passing (branch `feat/herdr-runtime-provider`).
+
+## Implemented (2026-06-29)
+`internal/runtime/herdr/`: `client.go` (herdr CLI client), `provider.go` (the full
+`runtime.Provider` + `ServerLifecycleProvider`), `capabilities.go` (`IdleWaitProvider` →
+native `agent wait`, `ImmediateNudgeProvider`), `provider_live_test.go` +
+`conformance_test.go`. Registered as the `"herdr"` runtime in `cmd/gc/runtime_registry.go`;
+the full `cmd/gc` binary builds clean (cgo/ICU). **Passes the full `runtimetest` Provider
+conformance suite + a live integration test against herdr 0.7.1.** One bug surfaced & fixed
+by conformance: some herdr verbs return an empty body on success, so `run()` treats
+whitespace-only output as a no-payload success.
+
+**To select it:** set the runtime to `"herdr"` (the same selector that picks tmux/k8s/ssh) —
+per-agent, per-rig, or city default. tmux stays the default + fallback. **Pilot safely:** flip
+`city.toml` to herdr but pin the **mayor to tmux** first (don't run the orchestrator on an
+unproven runtime — a wedge can't self-recover); bake, then drop the override. Omitted optional
+capabilities (Relaunch/ProcessTableScanner/InterruptBoundaryWait/Dialog) degrade gracefully.
+
 **Goal:** add **herdr** (<https://herdr.dev>) as an **opt-in** runtime provider alongside
 tmux / ssh / k8s, selectable through the existing runtime registry. NOT a tmux replacement —
 an additive backend, piloted on low-stakes agents first.
