@@ -16,8 +16,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // client runs `herdr` CLI verbs against a named herdr session and decodes the
@@ -185,4 +189,74 @@ func (c *client) paneRun(ctx context.Context, paneID, command string) error {
 func (c *client) closePane(ctx context.Context, paneID string) error {
 	_, err := c.run(ctx, "pane", "close", paneID)
 	return err
+}
+
+// getAgent fetches one agent by name: (info, true, nil) if present,
+// (zero, false, nil) if herdr reports it absent, (_, false, err) on failure.
+func (c *client) getAgent(ctx context.Context, name string) (agentInfo, bool, error) {
+	res, err := c.run(ctx, "agent", "get", name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not_found") || strings.Contains(err.Error(), "not found") {
+			return agentInfo{}, false, nil
+		}
+		return agentInfo{}, false, err
+	}
+	var wrap struct {
+		Agent agentInfo `json:"agent"`
+	}
+	if err := json.Unmarshal(res, &wrap); err != nil {
+		return agentInfo{}, false, fmt.Errorf("herdr agent get: decode: %w", err)
+	}
+	return wrap.Agent, true, nil
+}
+
+// ── shared session-server lifecycle ──────────────────────────────────────────
+
+// socketPath is the unix socket for this client's herdr session.
+func (c *client) socketPath() string {
+	home, _ := os.UserHomeDir()
+	if c.session == "" || c.session == "default" {
+		return filepath.Join(home, ".config", "herdr", "herdr.sock")
+	}
+	return filepath.Join(home, ".config", "herdr", "sessions", c.session, "herdr.sock")
+}
+
+// serverRunning reports whether the session-server socket is present.
+func (c *client) serverRunning() bool {
+	fi, err := os.Stat(c.socketPath())
+	return err == nil && fi.Mode()&os.ModeSocket != 0
+}
+
+// startServer launches the headless herdr server for this session (detached)
+// and waits for its socket. Idempotent — no-op if already running.
+func (c *client) startServer() error {
+	if c.serverRunning() {
+		return nil
+	}
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("herdr server: open devnull: %w", err)
+	}
+	defer devnull.Close()
+	cmd := exec.Command(c.bin, "--session", c.session, "server")
+	cmd.Stdout, cmd.Stderr = devnull, devnull
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("herdr server start: %w", err)
+	}
+	_ = cmd.Process.Release() // detach; herdr owns the daemon lifetime
+	for i := 0; i < 40; i++ {
+		if c.serverRunning() {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("herdr server for session %q did not become ready", c.session)
+}
+
+// stopServer stops this session's server (best-effort; tolerates not-running).
+// `session stop` targets the session by name and must bypass run() (which
+// prepends --session).
+func (c *client) stopServer() error {
+	_ = exec.Command(c.bin, "session", "stop", c.session).Run()
+	return nil
 }
