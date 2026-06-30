@@ -195,18 +195,42 @@ func (c *client) paneRun(ctx context.Context, paneID, command string) error {
 	return err
 }
 
-// deliverNudge types a nudge into the agent's input and submits it. Both steps go
-// through `pane run`, which reliably buffers into the pane — so the nudge survives
-// a freshly-spawned agent's boot. The first call enters the text (its own trailing
-// newline is swallowed as a literal newline by the TUI); a second `pane run` with
-// an empty command sends a discrete Enter that submits. (`agent send` a CR and
-// `pane send-keys "enter"` do NOT submit a spawning agent.) Contract = inject+submit.
-func (c *client) deliverNudge(ctx context.Context, paneID, text string) error {
+// deliverNudge types a nudge into the agent's input and submits it. The text is
+// injected with `pane run` (paste semantics: multi-line content is preserved and
+// the paste's own trailing newline is swallowed by the TUI, so the text never
+// submits on its own). Submission is a separate `agent send` of a raw CR, with
+// two timing requirements learned empirically against herdr 0.7.1 + the Claude
+// Code TUI:
+//
+//   - The TUI must be at a ready input prompt: a CR delivered mid-boot is
+//     swallowed. Callers deliver to a ready agent — Start waits for idle first
+//     (see startupNudgeIdleTimeout); the Nudge path targets running agents.
+//   - The CR must not race the paste: a CR sent immediately after `pane run` —
+//     even on a fully idle agent — lands before the paste commits and is
+//     swallowed, stranding the prompt typed-but-unsubmitted. So we settle before
+//     submitting, then send a second CR after another settle as insurance (a
+//     redundant CR on an already-submitted, empty prompt is a harmless no-op),
+//     covering a slow paste-commit under restart-time load.
+//
+// (`pane run ""` as a submit is a no-op that never submits, so it is not used.)
+// Contract: inject by pane id, submit by agent name.
+func (c *client) deliverNudge(ctx context.Context, paneID, name, text string) error {
 	if err := c.paneRun(ctx, paneID, text); err != nil {
 		return err
 	}
-	return c.paneRun(ctx, paneID, "")
+	time.Sleep(submitSettleDelay)
+	if err := c.send(ctx, name, "\r"); err != nil {
+		return err
+	}
+	time.Sleep(submitSettleDelay)
+	return c.send(ctx, name, "\r")
 }
+
+// submitSettleDelay is how long deliverNudge waits for a `pane run` paste to
+// commit in the TUI before sending the submit CR (and again before the insurance
+// CR). A CR that races the paste is swallowed; ~1s clears it with margin even
+// under the concurrent boot load of a town-wide restart.
+const submitSettleDelay = 1 * time.Second
 
 // closePane → `herdr pane close <paneID>`.
 func (c *client) closePane(ctx context.Context, paneID string) error {

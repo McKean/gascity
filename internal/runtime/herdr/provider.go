@@ -81,10 +81,30 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		_ = p.c.closePane(ctx, strayPane)
 	}
 	if cfg.Nudge != "" && info.PaneID != "" {
-		_ = p.c.deliverNudge(ctx, info.PaneID, cfg.Nudge)
+		// A freshly-spawned agent boots through a shell→TUI handoff before its
+		// input prompt is listening. The paste buffers and survives that window,
+		// but the submit CR does not: delivered too early it is swallowed, leaving
+		// the startup nudge typed-but-unsubmitted in the box — and the agent then
+		// idles forever at its prompt instead of running its first patrol. Wait
+		// for herdr to report the agent idle (its prompt rendered) before
+		// delivering, mirroring how tmux's doStartSession waits for readiness
+		// before its Step-6 startup nudge. Bounded and best-effort: on a boot that
+		// never idles we deliver anyway (no worse than the prior unconditional
+		// send), and the reconciler tolerates a slow Start
+		// (pendingCreateNeverStartedTimeout = 10m).
+		_ = p.WaitForIdle(ctx, name, startupNudgeIdleTimeout)
+		_ = p.c.deliverNudge(ctx, info.PaneID, name, cfg.Nudge)
 	}
 	return nil
 }
+
+// startupNudgeIdleTimeout bounds how long Start waits for a freshly-spawned
+// agent to reach its idle input prompt before delivering the startup nudge. The
+// wait returns as soon as the agent idles (typically a few seconds); the bound
+// only bites on a boot that never idles, after which the nudge is sent
+// best-effort. Sized generously to cover cold, concurrent boots during a
+// town-wide restart.
+const startupNudgeIdleTimeout = 60 * time.Second
 
 func (p *Provider) Stop(name string) error {
 	ctx := context.Background()
@@ -157,7 +177,7 @@ func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 	if err != nil || pid == "" {
 		return runtime.ErrSessionNotFound
 	}
-	return p.c.deliverNudge(ctx, pid, runtime.FlattenText(content))
+	return p.c.deliverNudge(ctx, pid, name, runtime.FlattenText(content))
 }
 
 // Peek reads the current rendered screen ("visible") — the liveness/fingerprint
