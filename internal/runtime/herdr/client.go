@@ -195,6 +195,19 @@ func (c *client) paneRun(ctx context.Context, paneID, command string) error {
 	return err
 }
 
+// deliverNudge types a nudge into the agent's input and submits it. Both steps go
+// through `pane run`, which reliably buffers into the pane — so the nudge survives
+// a freshly-spawned agent's boot. The first call enters the text (its own trailing
+// newline is swallowed as a literal newline by the TUI); a second `pane run` with
+// an empty command sends a discrete Enter that submits. (`agent send` a CR and
+// `pane send-keys "enter"` do NOT submit a spawning agent.) Contract = inject+submit.
+func (c *client) deliverNudge(ctx context.Context, paneID, text string) error {
+	if err := c.paneRun(ctx, paneID, text); err != nil {
+		return err
+	}
+	return c.paneRun(ctx, paneID, "")
+}
+
 // closePane → `herdr pane close <paneID>`.
 func (c *client) closePane(ctx context.Context, paneID string) error {
 	_, err := c.run(ctx, "pane", "close", paneID)

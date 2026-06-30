@@ -81,7 +81,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		_ = p.c.closePane(ctx, strayPane)
 	}
 	if cfg.Nudge != "" && info.PaneID != "" {
-		_ = p.c.paneRun(ctx, info.PaneID, cfg.Nudge)
+		_ = p.c.deliverNudge(ctx, info.PaneID, cfg.Nudge)
 	}
 	return nil
 }
@@ -157,7 +157,7 @@ func (p *Provider) Nudge(name string, content []runtime.ContentBlock) error {
 	if err != nil || pid == "" {
 		return runtime.ErrSessionNotFound
 	}
-	return p.c.paneRun(ctx, pid, runtime.FlattenText(content))
+	return p.c.deliverNudge(ctx, pid, runtime.FlattenText(content))
 }
 
 // Peek reads the current rendered screen ("visible") — the liveness/fingerprint
