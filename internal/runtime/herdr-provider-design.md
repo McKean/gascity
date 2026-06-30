@@ -12,6 +12,15 @@ conformance suite + a live integration test against herdr 0.7.1.** One bug surfa
 by conformance: some herdr verbs return an empty body on success, so `run()` treats
 whitespace-only output as a no-payload success.
 
+**Layout — one space per agent (2026-06-29):** `Start` places each agent in its **own tab** under a
+**per-rig (or per-town) workspace** — workspace = the rig (`<rig>--…`) or town (`<town>__…`), tab =
+the agent (segment after the last `__`); see `workspaceTabFor`. herdr auto-spawns a stray shell pane
+on `workspace`/`tab create`, so `Start` closes it, leaving the tab holding only the agent. Find-or-
+create of the shared rig workspace is mutex-serialized so concurrent same-rig Starts don't race to
+duplicate it. Teardown needs no special handling: closing the agent's pane drops its tab, and the
+last tab's workspace (herdr collapses empties). This replaces the earlier default that tiled every
+agent as a **pane** in one shared tab.
+
 **To select it:** set the runtime to `"herdr"` (the same selector that picks tmux/k8s/ssh) —
 per-agent, per-rig, or city default. tmux stays the default + fallback. **Pilot safely:** flip
 `city.toml` to herdr but pin the **mayor to tmux** first (don't run the orchestrator on an

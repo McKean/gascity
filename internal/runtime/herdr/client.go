@@ -7,9 +7,11 @@
 // the default. See herdr-provider-design.md for the full interface mapping and
 // the 0.7.1 validation notes.
 //
-// Model: one shared herdr *session* per city (≈ the tmux `-L gc` server), with
-// one named *agent* (pane) per gascity session. Agents are addressable by name,
-// which maps 1:1 onto gascity session names.
+// Model: one shared herdr *session* per city (≈ the tmux `-L gc` server). Within
+// that session agents are grouped one *workspace* per rig (or per town) and one
+// *tab* per agent, so each gascity session is its own switchable space rather
+// than a tiled pane. Agents are addressable by name, 1:1 with gascity session
+// names.
 package herdr
 
 import (
@@ -80,9 +82,14 @@ type agentInfo struct {
 	Cwd         string `json:"cwd"`
 }
 
-// startAgent → `herdr agent start <name> --no-focus --cwd <cwd> --env k=v … -- <argv…>`.
-func (c *client) startAgent(ctx context.Context, name, cwd string, env map[string]string, argv []string) (agentInfo, error) {
+// startAgent → `herdr agent start <name> --no-focus [--tab <tabID>] [--cwd <cwd>]
+// [--env k=v …] -- <argv…>`. A non-empty tabID places the agent in that tab;
+// without it herdr splits the focused tab into a new pane.
+func (c *client) startAgent(ctx context.Context, name, tabID, cwd string, env map[string]string, argv []string) (agentInfo, error) {
 	args := []string{"agent", "start", name, "--no-focus"}
+	if tabID != "" {
+		args = append(args, "--tab", tabID)
+	}
 	if cwd != "" {
 		args = append(args, "--cwd", cwd)
 	}
@@ -182,7 +189,7 @@ func (c *client) sendKeys(ctx context.Context, paneID string, keys ...string) er
 	return err
 }
 
-// paneRun → `herdr pane run <paneID> <command>` (text + Enter; the Nudge path).
+// paneRun → `herdr pane run <paneID> <command>` (pastes text into the pane).
 func (c *client) paneRun(ctx context.Context, paneID, command string) error {
 	_, err := c.run(ctx, "pane", "run", paneID, command)
 	return err
@@ -211,6 +218,144 @@ func (c *client) getAgent(ctx context.Context, name string) (agentInfo, bool, er
 		return agentInfo{}, false, fmt.Errorf("herdr agent get: decode: %w", err)
 	}
 	return wrap.Agent, true, nil
+}
+
+// ── workspace / tab placement ────────────────────────────────────────────────
+//
+// herdr's tree is workspace › tab › pane. To give each agent its own switchable
+// space (vs tiling every agent as a pane in one tab), Start groups agents one
+// workspace per rig/town and one tab per agent. `workspace create` and `tab
+// create` each auto-spawn a stray shell pane; the caller closes it so the tab
+// holds only the agent.
+
+type workspaceInfo struct {
+	WorkspaceID string `json:"workspace_id"`
+	Label       string `json:"label"`
+}
+
+type tabInfo struct {
+	TabID string `json:"tab_id"`
+	Label string `json:"label"`
+}
+
+// findWorkspace returns the id of the workspace whose label matches, or "".
+func (c *client) findWorkspace(ctx context.Context, label string) (string, error) {
+	res, err := c.run(ctx, "workspace", "list")
+	if err != nil {
+		return "", err
+	}
+	var wrap struct {
+		Workspaces []workspaceInfo `json:"workspaces"`
+	}
+	if err := json.Unmarshal(res, &wrap); err != nil {
+		return "", fmt.Errorf("herdr workspace list: decode: %w", err)
+	}
+	for _, w := range wrap.Workspaces {
+		if w.Label == label {
+			return w.WorkspaceID, nil
+		}
+	}
+	return "", nil
+}
+
+// workspaceCreate makes a workspace labeled label and returns its id plus the
+// default tab and stray shell pane herdr auto-spawns inside it (the caller
+// repurposes the tab and closes the stray pane).
+func (c *client) workspaceCreate(ctx context.Context, label string) (wsID, tabID, strayPane string, err error) {
+	res, err := c.run(ctx, "workspace", "create", "--label", label, "--no-focus")
+	if err != nil {
+		return "", "", "", err
+	}
+	var wrap struct {
+		Workspace struct {
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"workspace"`
+		Tab struct {
+			TabID string `json:"tab_id"`
+		} `json:"tab"`
+		RootPane struct {
+			PaneID string `json:"pane_id"`
+		} `json:"root_pane"`
+	}
+	if err := json.Unmarshal(res, &wrap); err != nil {
+		return "", "", "", fmt.Errorf("herdr workspace create: decode: %w", err)
+	}
+	return wrap.Workspace.WorkspaceID, wrap.Tab.TabID, wrap.RootPane.PaneID, nil
+}
+
+// findTab returns the id of the tab in wsID whose label matches, or "".
+func (c *client) findTab(ctx context.Context, wsID, label string) (string, error) {
+	res, err := c.run(ctx, "tab", "list", "--workspace", wsID)
+	if err != nil {
+		return "", err
+	}
+	var wrap struct {
+		Tabs []tabInfo `json:"tabs"`
+	}
+	if err := json.Unmarshal(res, &wrap); err != nil {
+		return "", fmt.Errorf("herdr tab list: decode: %w", err)
+	}
+	for _, t := range wrap.Tabs {
+		if t.Label == label {
+			return t.TabID, nil
+		}
+	}
+	return "", nil
+}
+
+// tabCreate makes a tab labeled label in wsID and returns its id plus the stray
+// shell pane herdr auto-spawns (the caller closes it after the agent starts).
+func (c *client) tabCreate(ctx context.Context, wsID, label string) (tabID, strayPane string, err error) {
+	res, err := c.run(ctx, "tab", "create", "--workspace", wsID, "--label", label, "--no-focus")
+	if err != nil {
+		return "", "", err
+	}
+	var wrap struct {
+		Tab struct {
+			TabID string `json:"tab_id"`
+		} `json:"tab"`
+		RootPane struct {
+			PaneID string `json:"pane_id"`
+		} `json:"root_pane"`
+	}
+	if err := json.Unmarshal(res, &wrap); err != nil {
+		return "", "", fmt.Errorf("herdr tab create: decode: %w", err)
+	}
+	return wrap.Tab.TabID, wrap.RootPane.PaneID, nil
+}
+
+// tabRename relabels a tab (cosmetic; best-effort at the call site).
+func (c *client) tabRename(ctx context.Context, tabID, label string) error {
+	_, err := c.run(ctx, "tab", "rename", tabID, label)
+	return err
+}
+
+// ensurePlacement resolves where an agent's pane should live: it finds or creates
+// the per-rig/town workspace wsLabel, then finds or creates the per-agent tab
+// tabLabel inside it. It returns the tab id and, when herdr auto-spawned a stray
+// shell pane (new workspace or new tab), that pane's id so Start can close it —
+// leaving the tab holding only the agent. A reused existing tab returns "".
+func (c *client) ensurePlacement(ctx context.Context, wsLabel, tabLabel string) (tabID, strayPane string, err error) {
+	wsID, err := c.findWorkspace(ctx, wsLabel)
+	if err != nil {
+		return "", "", err
+	}
+	if wsID == "" {
+		// New workspace: repurpose the default tab herdr spawns for this agent.
+		_, tabID, strayPane, err = c.workspaceCreate(ctx, wsLabel)
+		if err != nil {
+			return "", "", err
+		}
+		_ = c.tabRename(ctx, tabID, tabLabel) // cosmetic; ignore failure
+		return tabID, strayPane, nil
+	}
+	if tabID, err = c.findTab(ctx, wsID, tabLabel); err != nil {
+		return "", "", err
+	}
+	if tabID != "" {
+		return tabID, "", nil // reuse existing tab; no stray pane to close
+	}
+	return c.tabCreate(ctx, wsID, tabLabel)
 }
 
 // ── shared session-server lifecycle ──────────────────────────────────────────
