@@ -133,3 +133,25 @@ func TestNudgeStalledPoolClaims_SkipsNonPool(t *testing.T) {
 		t.Fatalf("must not touch a non-pool session: %q", out.String())
 	}
 }
+
+// The gate: activity-blind runtimes run the backstop, activity-reporting
+// runtimes skip it — UNLESS the provider declares NeedsClaimBackstop (herdr:
+// reporting activity restores idle visibility, not startup-paste redelivery,
+// so the flip to CanReportActivity must not retire the backstop).
+func TestClaimBackstopEnabled(t *testing.T) {
+	cases := []struct {
+		name string
+		caps runtime.ProviderCapabilities
+		want bool
+	}{
+		{"activity_blind", runtime.ProviderCapabilities{CanReportActivity: false}, true},
+		{"activity_blind_with_need", runtime.ProviderCapabilities{CanReportActivity: false, NeedsClaimBackstop: true}, true},
+		{"reports_activity", runtime.ProviderCapabilities{CanReportActivity: true}, false},
+		{"reports_activity_with_need_herdr", runtime.ProviderCapabilities{CanReportActivity: true, NeedsClaimBackstop: true}, true},
+	}
+	for _, tc := range cases {
+		if got := claimBackstopEnabled(tc.caps); got != tc.want {
+			t.Errorf("%s: claimBackstopEnabled = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

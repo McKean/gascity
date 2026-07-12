@@ -2326,10 +2326,12 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 
 	// Idle recovery: re-nudge pool slots that are running but never claimed
 	// their assigned trigger bead. Gated to runtimes the controller cannot see
-	// activity for (herdr): tmux self-heals a missed startup nudge through its
-	// relaunch/respawn path and reports activity, so it neither needs nor runs
+	// activity for, plus runtimes that declare the backstop necessary despite
+	// reporting activity (herdr: a swallowed startup paste has no
+	// relaunch/respawn redelivery path). tmux self-heals a missed startup
+	// nudge through its relaunch/respawn path, so it neither needs nor runs
 	// this. See nudgeStalledPoolClaims for the churn-free state machine.
-	if !cr.sp.Capabilities().CanReportActivity {
+	if claimBackstopEnabled(cr.sp.Capabilities()) {
 		phaseStart = time.Now()
 		nudgeStalledPoolClaims(cr.sp, cr.cfg, sessStore, open, assignedWorkBeads, time.Now(), cr.stdout)
 		recordPhase(TraceSiteControllerTickPhase, "bead_reconcile.nudge_stalled_pool_claims", phaseStart, nil)

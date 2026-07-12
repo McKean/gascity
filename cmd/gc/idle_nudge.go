@@ -32,6 +32,16 @@ const (
 	idleClaimNudgeMaxAttempts = 3                // then give up and log (manual re-nudge remains)
 )
 
+// claimBackstopEnabled reports whether nudgeStalledPoolClaims should run for
+// this provider: runtimes the controller cannot see activity for, plus
+// runtimes that declare the backstop necessary despite reporting activity
+// (NeedsClaimBackstop — herdr's startup paste can be swallowed and has no
+// relaunch/respawn redelivery path, so activity reporting alone must not
+// retire the backstop).
+func claimBackstopEnabled(caps runtime.ProviderCapabilities) bool {
+	return !caps.CanReportActivity || caps.NeedsClaimBackstop
+}
+
 // nudgeStalledPoolClaims is a reconcile-tick backstop for runtimes the
 // controller is blind to (herdr). It re-delivers the claim nudge to a pool slot
 // that is running but whose assigned trigger bead is still UNCLAIMED (open, not

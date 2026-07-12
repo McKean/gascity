@@ -25,6 +25,7 @@ type Provider struct {
 	c       *client
 	metaDir string     // sidecar KV root (herdr has no per-session metadata store)
 	mu      sync.Mutex // serializes workspace/tab find-or-create across concurrent Starts
+	act     activityTracker
 }
 
 var (
@@ -270,17 +271,30 @@ func (p *Provider) SendKeys(name string, keys ...string) error {
 func (p *Provider) Capabilities() runtime.ProviderCapabilities {
 	return runtime.ProviderCapabilities{
 		CanReportAttachment: false, // no clean IsAttached query
-		CanReportActivity:   false, // no GetLastActivity
+		CanReportActivity:   true,  // tracker-backed GetLastActivity (activity.go)
 		CanStream:           true,  // push session-event stream via SubscribeSessionEvents (events.subscribe socket API)
 		CanAttachTTY:        true,  // agent attach
+		// Reporting activity must not turn off the stalled-claim nudge
+		// backstop: a swallowed startup paste still has no relaunch/respawn
+		// redelivery path here (Relaunch is deliberately unimplemented —
+		// Stop+Start only), so the backstop stays the recovery of record.
+		NeedsClaimBackstop: true,
 	}
 }
 
-// ── best-effort / unsupported (the contract permits these) ───────────────────
+// GetLastActivity reports the session's last observed activity, maintained by
+// the lazily started activity tracker (activity.go): now while the agent's
+// status sits at working, the frozen stamp of its last observed change
+// otherwise, and the zero time for sessions the tracker has not observed. The
+// error is always nil — a tracker that cannot reach the server keeps its last
+// known state, and never-observed sessions read as unknown (zero), which every
+// consumer already treats as "no signal".
+func (p *Provider) GetLastActivity(name string) (time.Time, error) {
+	p.act.start(p)
+	return p.act.lastActivity(name), nil
+}
 
-// GetLastActivity is unsupported (herdr exposes no activity timestamp); it
-// returns the zero time.
-func (p *Provider) GetLastActivity(_ string) (time.Time, error) { return time.Time{}, nil }
+// ── best-effort / unsupported (the contract permits these) ───────────────────
 
 // ClearScrollback is a no-op: herdr exposes no scrollback-clear op.
 func (p *Provider) ClearScrollback(_ string) error { return nil }
