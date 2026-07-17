@@ -338,6 +338,14 @@ func (rp *ResolvedProvider) ProviderSessionCreateTransport() string {
 		// Live conformance coverage exists only on the CLI transport.
 		return ""
 	}
+	if family == "kimi" {
+		// kimi-code 0.26's acp subcommand completes the handshake but drops
+		// prompt submission (sessions stay transcript-empty) and session
+		// re-addressing (nudge fails: ACP provider does not own session), so
+		// headless defaults cannot ride it. The pane transport is the
+		// conformant path; explicit ACP opt-in remains for a fixed client.
+		return ""
+	}
 	if strings.TrimSpace(rp.ACPCommand) != "" || rp.ACPArgs != nil {
 		return SessionTransportACP
 	}
