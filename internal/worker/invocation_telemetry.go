@@ -271,18 +271,25 @@ var invocationUsageSpecs = map[string]invocationUsageSpec{
 		discover: discoverCodexInvocationTranscript,
 		extract:  SessionLogAdapter.CodexTailUsage,
 	},
+	"kimi": {
+		discover: discoverKimiInvocationTranscript,
+		extract:  SessionLogAdapter.KimiTailUsage,
+	},
 }
 
 // invocationUsageFamily resolves a provider string to its registered
 // invocation-usage family key: claude-family providers (including
-// claude-eco) match by name, codex resolves through sessionlog.ProviderFamily,
-// and everything else returns "" (unregistered).
+// claude-eco) match by name, codex and kimi resolve through
+// sessionlog.ProviderFamily, and everything else returns "" (unregistered).
 func invocationUsageFamily(provider string) string {
 	if strings.Contains(strings.ToLower(provider), "claude") {
 		return "claude"
 	}
-	if sessionlog.ProviderFamily(provider) == "codex" {
+	switch sessionlog.ProviderFamily(provider) {
+	case "codex":
 		return "codex"
+	case "kimi":
+		return "kimi"
 	}
 	return ""
 }
@@ -308,6 +315,16 @@ func discoverInvocationTranscriptViaManager(h *SessionHandle, id string, _ time.
 		return ""
 	}
 	return strings.TrimSpace(path)
+}
+
+// discoverKimiInvocationTranscript resolves a kimi-code 0.26+ wire
+// transcript by workdir through the session index (session_index.jsonl) —
+// the wd_<slug>_<hash> storage scheme is not derivable from the workdir
+// path, so the index is the only reliable route. Cheap: one index scan per
+// prompt operation, no session-store walking.
+func discoverKimiInvocationTranscript(h *SessionHandle, _ string, _ time.Time, meta map[string]string) string {
+	workDir := contract.WorkerDirFromMetadata(meta)
+	return sessionlog.FindKimiWireFileForWorkDir(h.adapter.SearchPaths, workDir)
 }
 
 // discoverCodexInvocationTranscript resolves a codex rollout. Identity

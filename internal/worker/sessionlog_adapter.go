@@ -94,6 +94,15 @@ func (a SessionLogAdapter) CodexTailUsage(path string) ([]sessionlog.TailUsage, 
 	return sessionlog.ExtractCodexTailUsageFromSearchPaths(a.SearchPaths, path)
 }
 
+// KimiTailUsage reads per-invocation token usage from a kimi-code wire
+// transcript (usage.record events). Validation merges the kimi default
+// roots (~/.kimi-code/sessions, legacy ~/.kimi/sessions) on top of the
+// configured search paths, because a.SearchPaths alone holds claude-style
+// roots that would reject real kimi transcript locations.
+func (a SessionLogAdapter) KimiTailUsage(path string) ([]sessionlog.TailUsage, error) {
+	return sessionlog.ExtractKimiTailUsageFromSearchPaths(a.SearchPaths, path)
+}
+
 // InvocationUsage reads per-invocation token usage from a discovered
 // transcript using the SAME extractor the prompt-op telemetry gate uses for
 // the provider's invocation-usage family (invocationUsageSpecs). It returns

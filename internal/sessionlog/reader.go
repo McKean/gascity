@@ -1453,13 +1453,19 @@ func DefaultGeminiSearchPaths() []string {
 }
 
 // DefaultKimiSearchPaths returns the default search paths for Kimi Code
-// session files (~/.kimi/sessions).
+// session files: ~/.kimi-code/sessions (kimi-code 0.26+, wd_<slug>_<hash>
+// dirs holding session_<uuid>/agents/<name>/wire.jsonl, indexed by the
+// sibling session_index.jsonl) and the legacy ~/.kimi/sessions
+// (<workdir-md5>/<session-id>/context.jsonl).
 func DefaultKimiSearchPaths() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
-	return []string{filepath.Join(home, ".kimi", "sessions")}
+	return []string{
+		filepath.Join(home, ".kimi-code", "sessions"),
+		filepath.Join(home, ".kimi", "sessions"),
+	}
 }
 
 // DefaultAntigravitySearchPaths returns the default search paths for Antigravity JSONL
