@@ -677,7 +677,7 @@ func TestResolvedWorkerRuntimeTransportUsesConfiguredTmuxForCommandOnlyBead(t *t
 	got := resolvedWorkerRuntimeTransport(session.Info{
 		Template: "gascity/workflows.kimi",
 		Provider: "kimi",
-		Command:  "aimux run kimi -- --yolo --no-thinking --model kimi-k2.6",
+		Command:  "aimux run kimi -- --yolo --model kimi-k2.6",
 	}, resolved, config.SessionTransportTmux, nil)
 	if got != config.SessionTransportTmux {
 		t.Fatalf("resolvedWorkerRuntimeTransport() = %q, want tmux", got)

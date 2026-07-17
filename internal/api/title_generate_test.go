@@ -168,10 +168,8 @@ func TestGenerateTitle_BuiltinKimiPromptFlagArgs(t *testing.T) {
 	args := captureGenerateTitleArgs(t, spec, "fix the login redirect loop")
 	want := []string{
 		"--yolo",
-		"--no-thinking",
 		"--model",
 		"kimi-k2.6",
-		"--quiet",
 		"--prompt",
 		titlePrompt + "fix the login redirect loop",
 	}
