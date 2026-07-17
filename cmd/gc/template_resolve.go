@@ -187,9 +187,10 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	}
 	providerFamily := resolvedProviderLaunchFamily(resolved)
 	installHooks := config.ResolveInstallHooks(cfgAgent, p.workspace)
-	if providerFamily == "kimi" && installHooksIncludeFamily(installHooks, "kimi", p.providers) {
-		command = appendKimiHookConfigArg(command)
-	}
+	// kimi-code 0.26.0 removed --config-file (fatal arg-parse error) and
+	// auto-discovers ./.kimi/config.toml instead, merging it with the user
+	// config — the hooks overlay copied into the workdir is picked up
+	// without any flag.
 	// Append schema-derived default args (e.g., --dangerously-skip-permissions
 	// from EffectiveDefaults["permission_mode"] = "unrestricted").
 	if defaultArgs := resolved.ResolveDefaultArgs(); len(defaultArgs) > 0 {
@@ -703,40 +704,6 @@ func isOperationalScript(rel string) bool {
 		}
 	}
 	return false
-}
-
-func installHooksIncludeFamily(installHooks []string, family string, providers map[string]config.ProviderSpec) bool {
-	family = strings.TrimSpace(family)
-	if family == "" {
-		return false
-	}
-	for _, hook := range installHooks {
-		hook = strings.TrimSpace(hook)
-		if hook == "" {
-			continue
-		}
-		if hook == family || config.BuiltinFamily(hook, providers) == family {
-			return true
-		}
-	}
-	return false
-}
-
-func appendKimiHookConfigArg(command string) string {
-	parts := shellquote.Split(command)
-	if len(parts) == 0 {
-		return command
-	}
-	configArgs := []string{"--config-file", ".kimi/config.toml"}
-	if parts[len(parts)-1] == "acp" {
-		withConfig := make([]string, 0, len(parts)+len(configArgs))
-		withConfig = append(withConfig, parts[:len(parts)-1]...)
-		withConfig = append(withConfig, configArgs...)
-		withConfig = append(withConfig, parts[len(parts)-1])
-		return shellquote.Join(withConfig)
-	}
-	parts = append(parts, configArgs...)
-	return shellquote.Join(parts)
 }
 
 func suppressStartupPromptForAgent(cfgAgent *config.Agent) bool {

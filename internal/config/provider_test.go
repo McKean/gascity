@@ -170,8 +170,8 @@ func TestBuiltinProvidersKimi(t *testing.T) {
 	if p.Command != "kimi" {
 		t.Errorf("Command = %q, want %q", p.Command, "kimi")
 	}
-	if !reflect.DeepEqual(p.Args, []string{"--yolo", "--no-thinking"}) {
-		t.Errorf("Args = %v, want [--yolo --no-thinking]", p.Args)
+	if !reflect.DeepEqual(p.Args, []string{"--yolo"}) {
+		t.Errorf("Args = %v, want [--yolo]", p.Args)
 	}
 	if p.PromptMode != "none" {
 		t.Errorf("PromptMode = %q, want none", p.PromptMode)
@@ -200,11 +200,11 @@ func TestBuiltinProvidersKimi(t *testing.T) {
 	if p.AcceptStartupDialogs == nil || *p.AcceptStartupDialogs {
 		t.Errorf("AcceptStartupDialogs = %v, want false", p.AcceptStartupDialogs)
 	}
-	if !reflect.DeepEqual(p.ACPArgs, []string{"--yolo", "--no-thinking", "acp"}) {
-		t.Errorf("ACPArgs = %v, want [--yolo --no-thinking acp]", p.ACPArgs)
+	if !reflect.DeepEqual(p.ACPArgs, []string{"--yolo", "acp"}) {
+		t.Errorf("ACPArgs = %v, want [--yolo acp]", p.ACPArgs)
 	}
-	if !reflect.DeepEqual(p.PrintArgs, []string{"--quiet", "--prompt"}) {
-		t.Errorf("PrintArgs = %v, want [--quiet --prompt]", p.PrintArgs)
+	if !reflect.DeepEqual(p.PrintArgs, []string{"--prompt"}) {
+		t.Errorf("PrintArgs = %v, want [--prompt]", p.PrintArgs)
 	}
 	if p.TitleModel != "kimi-k2.6" {
 		t.Errorf("TitleModel = %q, want kimi-k2.6", p.TitleModel)

@@ -387,9 +387,11 @@ var builtinProviderSpecs = map[string]BuiltinProviderSpec{
 		Command:     "kimi",
 		// Moonshot Kimi CLI: KIMI_API_KEY / KIMI_BASE_URL (NOT MOONSHOT_API_KEY,
 		// which is the raw Moonshot SDK var, nor OPENAI_* which is openai-type only).
-		UpstreamBaseURLEnv:   "KIMI_BASE_URL",
-		UpstreamAPIKeyEnv:    "KIMI_API_KEY",
-		Args:                 []string{"--yolo", "--no-thinking"},
+		UpstreamBaseURLEnv: "KIMI_BASE_URL",
+		UpstreamAPIKeyEnv:  "KIMI_API_KEY",
+		// kimi-code 0.26.0 removed --no-thinking (no thinking flags exist);
+		// passing it is a fatal arg-parse error before the CLI initializes.
+		Args:                 []string{"--yolo"},
 		PromptMode:           "none",
 		ReadyDelayMs:         5000,
 		ProcessNames:         []string{"kimi", "python"},
@@ -399,9 +401,10 @@ var builtinProviderSpecs = map[string]BuiltinProviderSpec{
 		InstructionsFile:     "AGENTS.md",
 		ResumeFlag:           "--session",
 		ResumeStyle:          "flag",
-		PrintArgs:            []string{"--quiet", "--prompt"},
-		TitleModel:           "kimi-k2.6",
-		ACPArgs:              []string{"--yolo", "--no-thinking", "acp"},
+		// 0.26.0 also removed --quiet; -p/--prompt alone is print mode.
+		PrintArgs:  []string{"--prompt"},
+		TitleModel: "kimi-k2.6",
+		ACPArgs:    []string{"--yolo", "acp"},
 		OptionsSchema: []BuiltinProviderOption{
 			{
 				Key:   "model",
