@@ -136,6 +136,16 @@ func (p *Provider) start(ctx context.Context, name string, cfg runtime.Config) e
 	// poked into that window judged the live runtime as belonging to no
 	// session and rolled back the pending create (live-verified churn).
 	p.stampIdentityMeta(name, cfg.Env)
+	// Seed the pane cache from the create response, for the same reason as the
+	// identity stamp above: detection-based registry registration lags create
+	// (~20s for a codex TUI), and the flicker-grace fallback (IsRunning/paneID)
+	// only consults HERDR_PANE_ID. Without the seed the whole boot window reads
+	// as a registry miss with no cached pane — runtime-missing — and each
+	// reconcile tick zombie-recycles the live, still-booting agent until the
+	// death-spiral quarantine breaks the loop (gc-89jx3s boot-window churn).
+	if info.PaneID != "" {
+		p.cachePaneID(name, info.PaneID)
+	}
 	// Post-launch steps mirror tmux's ordering: wait for readiness, run
 	// session_setup (Step 5.5), then deliver the startup nudge (Step 6).
 	//
