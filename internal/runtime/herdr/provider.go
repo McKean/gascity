@@ -404,16 +404,65 @@ func (p *Provider) Peek(name string, lines int) (string, error) {
 }
 
 // ListRunning returns the names of running agents whose names start with prefix.
+// Registry-first, with the same detection-flicker fallback as IsRunning: a
+// session absent from the registry but holding a sidecar-cached pane with a
+// live process tree is still running. The reconciler snapshots liveness through
+// THIS method, not IsRunning — so the fallback must live here too, or a created
+// -but-unregistered TUI (codex boots ~20s before detection lands) reads as
+// runtime-missing every tick and gets zombie-recycled mid-boot (gc-89jx3s
+// boot-window churn, reconciler leg).
 func (p *Provider) ListRunning(prefix string) ([]string, error) {
-	agents, err := p.c.listAgents(context.Background())
+	ctx := context.Background()
+	agents, err := p.c.listAgents(ctx)
 	if err != nil {
 		return nil, err
 	}
+	inRegistry := make(map[string]struct{}, len(agents))
+	registryPanes := make(map[string]struct{}, len(agents))
 	var out []string
 	for _, a := range agents {
+		inRegistry[a.Name] = struct{}{}
+		if a.PaneID != "" {
+			registryPanes[a.PaneID] = struct{}{}
+		}
 		if strings.HasPrefix(a.Name, prefix) {
 			out = append(out, a.Name)
 		}
+	}
+	// Sidecar sweep for registry misses. One dir per started-and-not-stopped
+	// session (SetMeta creates it, Stop's clearMeta removes it); dir names are
+	// sanitize()d, which is the identity for gc session names (citylayout
+	// already maps "/" to "--"). A cached pane owned by a DIFFERENT registered
+	// agent means the pane was reused after an unclean death — stale, skip it
+	// rather than resurrect the dead session's name.
+	entries, dirErr := os.ReadDir(p.metaDir)
+	if dirErr != nil {
+		return out, nil // best-effort: the registry answer stands
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if _, ok := inRegistry[name]; ok {
+			continue
+		}
+		pid, metaErr := p.GetMeta(name, herdrPaneIDMetaKey)
+		pid = strings.TrimSpace(pid)
+		if metaErr != nil || pid == "" {
+			continue
+		}
+		if _, taken := registryPanes[pid]; taken {
+			continue
+		}
+		shellPID, _, procErr := p.c.processInfo(ctx, pid)
+		if procErr != nil || shellPID == 0 {
+			continue
+		}
+		out = append(out, name)
 	}
 	return out, nil
 }
