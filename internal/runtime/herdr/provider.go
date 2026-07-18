@@ -379,12 +379,26 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 	}
 	for _, pr := range fg {
 		for _, want := range processNames {
-			if pr.Name == want {
+			if processMatches(pr, want) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// processMatches reports whether a foreground process satisfies a processNames
+// hint. The kernel-reported comm name alone is not enough: macOS truncates it
+// to ~15 bytes and multi-arch launchers exec a platform binary — the `codex`
+// CLI runs with comm "codex-aarch64-a…", so an exact match against the hint
+// "codex" was false for every codex pane ever and fed alive=false into each
+// reconcile tick (gc-89jx3s churn, the operative leg). argv0 carries the
+// launched name; match it by basename alongside the comm name.
+func processMatches(pr proc, want string) bool {
+	if pr.Name == want {
+		return true
+	}
+	return len(pr.Argv) > 0 && filepath.Base(pr.Argv[0]) == want
 }
 
 // Nudge injects and submits text into a running agent's input.
