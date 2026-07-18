@@ -2432,6 +2432,20 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		}
 	}
 	recordPhase(TraceSiteControllerTickPhase, "bead_reconcile.dispatch_wait_nudges", phaseStart, traceSessionSnapshotFields(dispatchSessionBeads))
+	// Named-work delivery: nudge running named sessions with their matched
+	// assignee work (the named-session counterpart of the warm-bind claim
+	// nudge — named sessions have no trigger binding, so no other retry
+	// covers a startup prompt lost to a TUI boot race; gc-89jx3s). Uses the
+	// POST-reconcile snapshot so a session started this very tick is
+	// visible awake and receives its assignment in the same tick, ahead of
+	// idle-sleep.
+	if err == nil && len(result.NamedWorkMatches) > 0 {
+		phaseStart = time.Now()
+		deliverNamedWorkNudges(ctx, cr.sp, sessStore.Store, store, rigStores, dispatchSessionBeads.OpenInfos(), result.NamedWorkMatches, cr.stderr)
+		recordPhase(TraceSiteControllerTickPhase, "bead_reconcile.named_work_nudges", phaseStart, map[string]any{
+			"match_count": len(result.NamedWorkMatches),
+		})
+	}
 	// Patrol-tick fallback for the supervisor nudge dispatcher: ensures
 	// queued items get delivered even if the wake socket missed the
 	// enqueue (process race during supervisor restart, listener crash).

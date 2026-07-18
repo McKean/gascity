@@ -293,18 +293,53 @@ func (p *Provider) Interrupt(name string) error {
 	return p.c.sendKeys(ctx, pid, "ctrl+c") // herdr has no signal API; ctrl+c is the soft interrupt
 }
 
+// herdrPaneIDMetaKey caches the agent's pane id in the meta sidecar. herdr's
+// agent registry is detection-based and can transiently drop a non-claude
+// TUI (codex flickers ~20s after registration, gc-bvjl6o); every successful
+// registry resolution refreshes this cache so liveness checks can fall back
+// to the pane itself when the registry goes blind.
+const herdrPaneIDMetaKey = "HERDR_PANE_ID"
+
 // IsRunning reports whether an agent with this name exists in the session.
+// A registry miss falls back to the sidecar-cached pane: if that pane still
+// hosts a live process tree, the agent is treated as running — detection
+// flicker must not read as session death (the event-liveness reap loop,
+// gc-89jx3s). A genuinely dead agent still zombie-recycles through the
+// ProcessAlive(processNames) discrimination, which is unaffected: its pane
+// foreground no longer contains the agent process.
 func (p *Provider) IsRunning(name string) bool {
-	agents, err := p.c.listAgents(context.Background())
+	ctx := context.Background()
+	agents, err := p.c.listAgents(ctx)
 	if err != nil {
 		return false
 	}
 	for _, a := range agents {
 		if a.Name == name {
+			if a.PaneID != "" {
+				p.cachePaneID(name, a.PaneID)
+			}
 			return true
 		}
 	}
-	return false
+	// Registry miss — detection-flicker grace via the cached pane.
+	pid, err := p.GetMeta(name, herdrPaneIDMetaKey)
+	if err != nil || strings.TrimSpace(pid) == "" {
+		return false
+	}
+	shellPID, _, err := p.c.processInfo(ctx, strings.TrimSpace(pid))
+	if err != nil || shellPID == 0 {
+		return false
+	}
+	return true
+}
+
+// cachePaneID refreshes the sidecar pane cache, write-on-change so steady
+// operation costs one file read, not a write per liveness probe.
+func (p *Provider) cachePaneID(name, paneID string) {
+	if cur, err := p.GetMeta(name, herdrPaneIDMetaKey); err == nil && cur == paneID {
+		return
+	}
+	_ = p.SetMeta(name, herdrPaneIDMetaKey, paneID) // best-effort cache
 }
 
 // IsAttached reports false: herdr 0.7.1 exposes no clean attach-state query.
@@ -507,7 +542,17 @@ func (p *Provider) paneID(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 	if !ok {
+		// Registry miss — detection-flicker grace (see IsRunning): fall back
+		// to the sidecar-cached pane so nudges/interrupts still reach a live
+		// TUI the registry transiently forgot.
+		cached, metaErr := p.GetMeta(name, herdrPaneIDMetaKey)
+		if metaErr == nil && strings.TrimSpace(cached) != "" {
+			return strings.TrimSpace(cached), nil
+		}
 		return "", nil
+	}
+	if a.PaneID != "" {
+		p.cachePaneID(name, a.PaneID)
 	}
 	return a.PaneID, nil
 }

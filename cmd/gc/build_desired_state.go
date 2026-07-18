@@ -67,6 +67,13 @@ type DesiredStateResult struct {
 	// direct assignee demand (Assignee == identity). The reconciler merges this
 	// into poolDesired so that on-demand named sessions remain config-eligible.
 	NamedSessionDemand map[string]bool
+	// NamedWorkMatches records, per named-session identity with direct
+	// assignee demand, the concrete work bead behind the match. The
+	// named-work delivery pass nudges the running session with this
+	// assignment: named sessions have no trigger binding and therefore no
+	// warm-bind retry — a lost startup prompt otherwise leaves them idle
+	// forever (the reviewer sleep/wake loop, gc-89jx3s).
+	NamedWorkMatches map[string]NamedWorkMatch
 	// ReadyAssigned is the set of AssignedWorkBeads that carry real wake-demand
 	// readiness, keyed by store ref + bead ID: in-progress work, assigned
 	// molecule roots, and store-Ready()/deps-gated open work. Beads admitted
@@ -920,6 +927,7 @@ func buildDesiredStateWithSessionBeads(
 		namedSpecs[identity] = spec
 	}
 	namedWorkReady := make(map[string]bool, len(namedSpecs))
+	var namedWorkMatches map[string]NamedWorkMatch
 	for identity := range namedDefaultDemand {
 		if _, ok := namedSpecs[identity]; ok {
 			namedWorkReady[identity] = true
@@ -933,6 +941,10 @@ func buildDesiredStateWithSessionBeads(
 	// metadata is consumed by the agent-side gc hook path.
 	for identity, spec := range namedSpecs {
 		for i, wb := range assignedWorkBeads {
+			ref := ""
+			if i < len(assignedWorkStoreRefs) {
+				ref = assignedWorkStoreRefs[i]
+			}
 			// in_progress work is always actionable; open work is direct named
 			// demand only when it passed the store's readiness/deps gate. Without
 			// the readiness check, an open assigned bead that entered the snapshot
@@ -941,10 +953,6 @@ func buildDesiredStateWithSessionBeads(
 			switch wb.Status {
 			case "in_progress":
 			case "open":
-				ref := ""
-				if i < len(assignedWorkStoreRefs) {
-					ref = assignedWorkStoreRefs[i]
-				}
 				if !readyAssigned[storeScopedBeadKey{StoreRef: ref, ID: wb.ID}] {
 					continue
 				}
@@ -974,6 +982,15 @@ func buildDesiredStateWithSessionBeads(
 			}
 			fmt.Fprintf(stderr, "namedWorkReady: %s matched by bead %s (assignee=%s status=%s)\n", identity, wb.ID, assignee, wb.Status) //nolint:errcheck
 			namedWorkReady[identity] = true
+			if namedWorkMatches == nil {
+				namedWorkMatches = make(map[string]NamedWorkMatch)
+			}
+			namedWorkMatches[identity] = NamedWorkMatch{
+				BeadID:   wb.ID,
+				StoreRef: ref,
+				Title:    strings.TrimSpace(wb.Title),
+				Branch:   strings.TrimSpace(wb.Metadata["branch"]),
+			}
 			break
 		}
 	}
@@ -1042,6 +1059,7 @@ func buildDesiredStateWithSessionBeads(
 		AssignedWorkStoreRefs:           assignedWorkStoreRefs,
 		ReadyAssigned:                   readyAssigned,
 		NamedSessionDemand:              namedWorkReady,
+		NamedWorkMatches:                namedWorkMatches,
 		StoreQueryPartial:               storePartial,
 		BeaconTime:                      beaconTime,
 	}
