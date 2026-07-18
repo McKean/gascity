@@ -124,8 +124,13 @@ func deliverNamedWorkNudges(
 		if err != nil {
 			continue
 		}
-		if strings.TrimSpace(raw.Metadata[namedWorkNudgedForBeadKey]) == m.BeadID {
-			continue // this work item was already delivered
+		// Marker is per (work bead, continuation epoch): a session that slept
+		// and woke is a fresh incarnation with an empty context — the same
+		// work item must be delivered again or the incarnation idles
+		// promptless and the sleep/respawn loop never converges.
+		markerWant := m.BeadID + "@" + strings.TrimSpace(raw.Metadata["continuation_epoch"])
+		if strings.TrimSpace(raw.Metadata[namedWorkNudgedForBeadKey]) == markerWant {
+			continue // delivered to this incarnation already
 		}
 		if !namedWorkBeadStillAssigned(identity, m, cityStore, rigStores) {
 			continue
@@ -137,7 +142,7 @@ func deliverNamedWorkNudges(
 			fmt.Fprintf(stderr, "named-work nudge: %s failed for bead %s: %v\n", info.SessionName, m.BeadID, err) //nolint:errcheck
 			continue // marker unset → retried next tick
 		}
-		if err := sessionFrontDoor(sessStore).SetMarker(info.ID, namedWorkNudgedForBeadKey, m.BeadID); err != nil {
+		if err := sessionFrontDoor(sessStore).SetMarker(info.ID, namedWorkNudgedForBeadKey, markerWant); err != nil {
 			fmt.Fprintf(stderr, "named-work nudge: marking %s failed: %v\n", info.ID, err) //nolint:errcheck
 			continue
 		}
