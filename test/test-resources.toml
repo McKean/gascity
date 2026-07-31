@@ -23,8 +23,8 @@ expires = "2026-10-01"
 [[audit_baseline]]
 scope = "all"
 resource = "fixed_sleep"
-baseline_calls = 473
-baseline_files = 160
+baseline_calls = 428
+baseline_files = 158
 reported_calls = 447
 reported_files = 157
 owner_bead = "ga-80po0c.2"
@@ -51,8 +51,8 @@ expires = "2026-10-01"
 [[debt]]
 scope = "untagged"
 resource = "fixed_sleep"
-baseline_calls = 321
-baseline_files = 117
+baseline_calls = 283
+baseline_files = 112
 reported_calls = 295
 reported_files = 114
 owner_bead = "ga-80po0c.2"
@@ -116,14 +116,14 @@ expires = "2026-10-01"
 [[debt]]
 scope = "untagged"
 resource = "net_listen"
-baseline_calls = 93
-baseline_files = 35
-reported_calls = 93
-reported_files = 35
-owner_bead = "ga-80po0c.2.2"
-invariant = "untagged net.Listen call/file totals cannot grow; reductions must lower this baseline"
-resource_owner = "each owning test closes its listener and removes duplicate listener-backed coverage"
-migration_target = "P0.4c"
+baseline_calls = 95
+baseline_files = 36
+reported_calls = 92
+reported_files = 34
+owner_bead = "ga-80po0c.2.2.2"
+invariant = "untagged stream-listener call/file totals cannot grow; reductions must lower this baseline"
+resource_owner = "each owning test closes its stream listener and removes duplicate listener-backed coverage"
+migration_target = "P0.4c-listener"
 expires = "2026-10-01"
 
 [[debt]]
@@ -198,10 +198,10 @@ expires = "2026-10-01"
 [[small_debt]]
 scope = "untagged"
 resource = "fixed_sleep"
-baseline_calls = 321
-baseline_files = 117
-reported_calls = 321
-reported_files = 117
+baseline_calls = 283
+baseline_files = 112
+reported_calls = 287
+reported_files = 113
 owner_bead = "ga-80po0c.2.1"
 invariant = "untagged Small fixed-sleep call/file totals cannot grow; reductions must lower this baseline"
 resource_owner = "non-Medium lexical owners replace elapsed wall time with lifecycle signals"
@@ -265,12 +265,12 @@ scope = "untagged"
 resource = "net_listen"
 baseline_calls = 93
 baseline_files = 35
-reported_calls = 93
-reported_files = 35
-owner_bead = "ga-80po0c.2.2"
-invariant = "untagged Small net.Listen call/file totals cannot grow; reductions must lower this baseline"
-resource_owner = "non-Medium lexical owners move listener-backed tests to exact Medium ownership or replace the listener"
-migration_target = "P0.4c"
+reported_calls = 92
+reported_files = 34
+owner_bead = "ga-80po0c.2.2.2"
+invariant = "untagged Small stream-listener call/file totals cannot grow; reductions must lower this baseline"
+resource_owner = "non-Medium lexical owners move stream-listener tests to exact Medium ownership or replace the listener"
+migration_target = "P0.4c-listener"
 expires = "2026-10-01"
 
 [[small_debt]]

@@ -1590,6 +1590,44 @@ func TestBootstrapPolicyOwnsNetListenDebt(t *testing.T) {
 	}
 }
 
+func TestBootstrapPolicyOwnsNetListenDebtAndExactMediumOwners(t *testing.T) {
+	t.Parallel()
+
+	debt := findRow(t, bootstrapPolicy.Debt, ScopeUntagged, ResourceNetListen)
+	if debt.BaselineCalls != 95 || debt.BaselineFiles != 36 || debt.ReportedCalls != 92 || debt.ReportedFiles != 34 {
+		t.Fatalf("stream-listener source baseline/reported = %d/%d, %d/%d; want 95/36, 92/34", debt.BaselineCalls, debt.BaselineFiles, debt.ReportedCalls, debt.ReportedFiles)
+	}
+	smallDebt := findRow(t, bootstrapPolicy.SmallDebt, ScopeUntagged, ResourceNetListen)
+	if smallDebt.BaselineCalls != 93 || smallDebt.BaselineFiles != 35 {
+		t.Fatalf("stream-listener Small baseline = %d/%d, want 93/35", smallDebt.BaselineCalls, smallDebt.BaselineFiles)
+	}
+	for _, row := range []*Baseline{debt, smallDebt} {
+		if row.OwnerBead != "ga-80po0c.2.2.2" || row.MigrationTarget != "P0.4c-listener" {
+			t.Fatalf("stream-listener owner = %q/%q, want ga-80po0c.2.2.2/P0.4c-listener", row.OwnerBead, row.MigrationTarget)
+		}
+	}
+
+	wantOwners := map[string]bool{
+		"TestServerAliveDetectsLiveServer":  true,
+		"TestServerAliveRejectsStaleSocket": true,
+	}
+	for _, row := range bootstrapPolicy.Medium {
+		if row.PackageDir != "internal/runtime/herdr" || row.PackageName != "herdr" || !wantOwners[row.Owner] {
+			continue
+		}
+		if len(row.Resources) != 1 || row.Resources[0] != ResourceNetListen {
+			t.Fatalf("herdr Medium owner %s resources = %v, want net_listen", row.Owner, row.Resources)
+		}
+		if row.OwnerBead != "ga-80po0c.2.2.2" || row.MigrationTarget != "P0.4c-listener" {
+			t.Fatalf("herdr Medium owner %s policy = %q/%q, want ga-80po0c.2.2.2/P0.4c-listener", row.Owner, row.OwnerBead, row.MigrationTarget)
+		}
+		delete(wantOwners, row.Owner)
+	}
+	if len(wantOwners) != 0 {
+		t.Fatalf("missing exact herdr stream-listener Medium owners: %v", wantOwners)
+	}
+}
+
 func TestBootstrapPolicyOwnsNetListenConfigDebt(t *testing.T) {
 	t.Parallel()
 
