@@ -98,7 +98,7 @@ esac
 	if err := os.WriteFile(script, []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := New(session, metaDir, t.TempDir(), time.Second, time.Second)
+	p := New(session, metaDir, t.TempDir(), time.Second)
 	p.c.bin = script
 	return p, session, state
 }

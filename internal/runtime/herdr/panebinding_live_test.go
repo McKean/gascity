@@ -26,7 +26,7 @@ func TestProviderLiveOccupantSwapKeepsLiveness(t *testing.T) {
 		t.Skip("herdr not installed")
 	}
 
-	p := New("gctest-swap", t.TempDir(), t.TempDir(), 0, 0)
+	p := New("gctest-swap", t.TempDir(), t.TempDir(), 0)
 	_ = p.Stop("swap") // clear any leftover from a crashed prior run
 	t.Cleanup(func() { _ = p.Stop("swap"); _ = p.TeardownServer() })
 

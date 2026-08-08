@@ -27,7 +27,7 @@ func TestProviderLiveClaudeKindPath(t *testing.T) {
 		t.Skip("claude not installed")
 	}
 
-	p := New("gctest-kind", t.TempDir(), t.TempDir(), 0, 0)
+	p := New("gctest-kind", t.TempDir(), t.TempDir(), 0)
 	_ = p.Stop("kindsmoke")
 	t.Cleanup(func() { _ = p.Stop("kindsmoke"); _ = p.TeardownServer() })
 
