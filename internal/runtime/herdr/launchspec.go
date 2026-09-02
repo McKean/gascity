@@ -38,9 +38,16 @@ var herdrAgentKinds = map[string]bool{
 }
 
 // launchShellMetachars are characters whose presence means the command needs a
-// real shell (operators, substitution, env-prefix assignments): conservative —
-// quoted occurrences also trigger the fallback, which still runs correctly.
-const launchShellMetachars = "|&;<>()`$=\n"
+// real shell (operators, substitution): conservative — quoted occurrences also
+// trigger the fallback, which still runs correctly. '=' is deliberately NOT in
+// this set: it is shell syntax only as an env-prefix assignment ("FOO=bar cmd"),
+// which launchSpecFor detects on the first token, while inside an argument it
+// is plain argv ("codex -c model_reasoning_effort=xhigh"). Treating every '='
+// as shell syntax pushed the codex reviewer onto the raw `exec /bin/sh -c`
+// path, where no herdr agent name is ever registered, so every liveness
+// lookup failed and the reconciler recreated the live session ~90s after
+// each wake (gc-fogmz3, gc-89jx3s).
+const launchShellMetachars = "|&;<>()`$\n"
 
 // launchSpecFor parses a session command into its herdr launch mode. A blank
 // command returns the zero spec: the pane's own shell is the session.
@@ -54,6 +61,10 @@ func launchSpecFor(command string) launchSpec {
 	}
 	parts := shellquote.Split(command)
 	if len(parts) == 0 {
+		return launchSpec{Raw: command}
+	}
+	if strings.Contains(parts[0], "=") {
+		// "FOO=bar cmd …": an env-prefix assignment needs a real shell.
 		return launchSpec{Raw: command}
 	}
 	if kind := filepath.Base(parts[0]); herdrAgentKinds[kind] {

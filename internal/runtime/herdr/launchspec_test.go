@@ -53,6 +53,36 @@ func TestLaunchSpecForShellMetacharsFallBackToRaw(t *testing.T) {
 	}
 }
 
+// '=' inside an argument is plain argv, not shell syntax: the codex reviewer's
+// "-c model_reasoning_effort=xhigh" must launch as the codex kind so herdr
+// registers the agent name and liveness resolves (gc-fogmz3).
+func TestLaunchSpecForEqualsInsideArgKeepsKind(t *testing.T) {
+	cmd := "codex --dangerously-bypass-hook-trust --model gpt-5.6-luna -c model_reasoning_effort=xhigh"
+	got := launchSpecFor(cmd)
+	if got.Kind != "codex" {
+		t.Fatalf("launchSpecFor(%q).Kind = %q; want codex (spec %+v)", cmd, got.Kind, got)
+	}
+	want := []string{"--dangerously-bypass-hook-trust", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=xhigh"}
+	if len(got.Args) != len(want) {
+		t.Fatalf("Args = %v; want %v", got.Args, want)
+	}
+	for i := range want {
+		if got.Args[i] != want[i] {
+			t.Fatalf("Args[%d] = %q; want %q", i, got.Args[i], want[i])
+		}
+	}
+}
+
+// An env-prefix assignment on the first token still needs a real shell.
+func TestLaunchSpecForEnvPrefixAssignmentIsRaw(t *testing.T) {
+	for _, cmd := range []string{"FOO=bar claude --flag", "A=1 B=2 codex"} {
+		got := launchSpecFor(cmd)
+		if got.Kind != "" || got.Raw != cmd {
+			t.Errorf("launchSpecFor(%q) = %+v; want raw fallback", cmd, got)
+		}
+	}
+}
+
 // Unknown executables are raw.
 func TestLaunchSpecForUnknownExecutableIsRaw(t *testing.T) {
 	got := launchSpecFor("python3 worker.py --queue main")
