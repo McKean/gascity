@@ -66,6 +66,26 @@ type envelope struct {
 	Error  *herdrError     `json:"error"`
 }
 
+// stderrEnvelopeError extracts a herdr error envelope from a failed CLI
+// invocation's stderr. The envelope is the last line that parses as
+// {"error":{"code":...,"message":...}}; anything else (warnings, plain
+// text) yields nil so the caller keeps the raw stderr in the error string.
+func stderrEnvelopeError(stderr []byte) *herdrError {
+	lines := strings.Split(strings.TrimSpace(string(stderr)), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var env envelope
+		if err := json.Unmarshal([]byte(line), &env); err != nil || env.Error == nil || env.Error.Code == "" {
+			continue
+		}
+		return env.Error
+	}
+	return nil
+}
+
 // run executes `herdr --session <session> <args…>` and returns the result
 // payload, or an error (transport failure or herdr-reported error).
 func (c *client) run(ctx context.Context, args ...string) (json.RawMessage, error) {
@@ -74,6 +94,15 @@ func (c *client) run(ctx context.Context, args ...string) (json.RawMessage, erro
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			// herdr >= 0.8.0 reports API errors as the same JSON envelope,
+			// but on stderr with a non-zero exit (older builds returned it
+			// on stdout with exit 0, handled below). Surface the typed
+			// error so callers can branch on the code: without it the
+			// agent_pane_busy retry and the agent_name_taken adoption never
+			// fire, and a lost shell-readiness race becomes a dead session.
+			if he := stderrEnvelopeError(ee.Stderr); he != nil {
+				return nil, fmt.Errorf("herdr %v: %w", args, he)
+			}
 			return nil, fmt.Errorf("herdr %v: %s", args, ee.Stderr)
 		}
 		return nil, fmt.Errorf("herdr %v: %w", args, err)
