@@ -393,10 +393,11 @@ func (c *CachingStore) applyRefreshWorkSetLocked(query ListQuery, startSeq uint6
 	// about to keep.
 	announceAbsorb := func(id string, fresh Bead) {
 		cached, cachedExists := c.beads[id]
-		if eventType := refreshAbsorbNotification(cached, cachedExists, fresh, fullyPrimed); eventType != "" {
+		announced := c.announcedBeadLocked(id, fresh)
+		if eventType := refreshAbsorbNotification(cached, cachedExists, announced, fullyPrimed); eventType != "" {
 			notifications = append(notifications, cacheNotification{
 				eventType: eventType,
-				bead:      c.announcedBeadLocked(id, fresh),
+				bead:      announced,
 			})
 		}
 	}
@@ -497,8 +498,8 @@ func (c *CachingStore) applyRefreshWorkSetLocked(query ListQuery, startSeq uint6
 	return refreshed, notifications
 }
 
-// announcedBeadLocked builds the payload for a read-path emission: the fresh
-// row, with the cache's dependency set filled in when the row carries none.
+// announcedBeadLocked builds the snapshot a read-path absorb will leave in the
+// cache, including retained dependency and ready-projection state.
 //
 // The controller feeds a cache emission straight back into the cache through
 // ApplyEventSnapshot, which takes the payload's dependency set as authoritative
@@ -510,16 +511,25 @@ func (c *CachingStore) applyRefreshWorkSetLocked(query ListQuery, startSeq uint6
 // the pass after that reads the cleared state as a change and emits again.
 //
 // Filling from c.deps makes the payload describe the state the absorb leaves
-// behind, which is what an authoritative snapshot has to mean. Caller must hold
-// c.mu and call this BEFORE the absorb, while c.deps still holds the set the
-// absorb is about to keep.
+// behind, which is what an authoritative snapshot has to mean. The absorb also
+// preserves a cached is_blocked value when dependencies are unchanged, so the
+// event comparison and payload must preserve that value too when a live list
+// omits it. Caller must hold c.mu and call this BEFORE the absorb, while c.deps
+// still holds the set the absorb is about to keep.
 func (c *CachingStore) announcedBeadLocked(id string, fresh Bead) Bead {
 	b := cloneBead(fresh)
-	if beadCarriesDependencyFields(b) {
-		return b
+	if !beadCarriesDependencyFields(b) {
+		if cachedDeps, ok := c.deps[id]; ok && len(cachedDeps) > 0 {
+			b.Dependencies = cloneDeps(cachedDeps)
+		}
 	}
-	if cachedDeps, ok := c.deps[id]; ok && len(cachedDeps) > 0 {
-		b.Dependencies = cloneDeps(cachedDeps)
+	if b.IsBlocked == nil {
+		if cached, ok := c.beads[id]; ok && cached.IsBlocked != nil {
+			freshDeps := effectiveAbsorbDeps(c.deps[id], b, absorbOpts{depsMode: depsFromFieldsIfCarried})
+			if !depsChanged(c.deps[id], freshDeps) {
+				b.IsBlocked = cloneBoolPtr(cached.IsBlocked)
+			}
+		}
 	}
 	return b
 }
