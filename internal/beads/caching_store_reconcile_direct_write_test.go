@@ -19,6 +19,29 @@ type directWriteEvent struct {
 	payload   json.RawMessage
 }
 
+// projectionOmittingReadStore models bd list rows that omit the derived
+// is_blocked projection while cache priming can obtain it separately.
+type projectionOmittingReadStore struct {
+	*MemStore
+	enrichErr error
+}
+
+func (s *projectionOmittingReadStore) List(query ListQuery) ([]Bead, error) {
+	items, err := s.MemStore.List(query)
+	for i := range items {
+		items[i].IsBlocked = nil
+	}
+	return items, err
+}
+
+func (s *projectionOmittingReadStore) enrichReadyProjectionForCache(items []Bead) ([]Bead, error) {
+	unblocked := false
+	for i := range items {
+		items[i].IsBlocked = &unblocked
+	}
+	return items, s.enrichErr
+}
+
 func (r *directWriteRecorder) record(eventType, beadID string, payload json.RawMessage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -294,4 +317,47 @@ func TestDirectBackingWriteReachesOnChangeEvenWhenAReadObservesItFirst(t *testin
 			t.Fatalf("live reads over an unchanged backing emitted %d events: %v", len(got), got)
 		}
 	})
+}
+
+func TestLiveReadOmittingReadyProjectionDoesNotAnnounceOrClearIt(t *testing.T) {
+	t.Parallel()
+
+	mem := &projectionOmittingReadStore{MemStore: NewMemStore()}
+	seed, err := mem.Create(Bead{Title: "steady work", Status: "open", Type: "task"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	rec := &directWriteRecorder{}
+	cs := NewCachingStoreForTest(mem, rec.record)
+	if err := cs.Prime(context.Background()); err != nil {
+		t.Fatalf("Prime: %v", err)
+	}
+	rec.reset()
+
+	liveRead(t, cs)
+
+	if got := rec.snapshot(); len(got) != 0 {
+		t.Fatalf("live read that omitted is_blocked emitted %d events: %v", len(got), got)
+	}
+	cs.mu.RLock()
+	got := cs.beads[seed.ID].IsBlocked
+	cs.mu.RUnlock()
+	if got == nil || *got {
+		t.Fatalf("cached IsBlocked after projection-free live read = %v, want &false", got)
+	}
+
+	assignee := "reviewer"
+	if err := mem.Update(seed.ID, UpdateOpts{Assignee: &assignee}); err != nil {
+		t.Fatalf("external route: %v", err)
+	}
+	liveRead(t, cs)
+	e := rec.findOne(t, "bead.updated", seed.ID)
+	announced := rec.decode(t, e)
+	if announced.Assignee != assignee {
+		t.Fatalf("bead.updated payload does not carry the route: assignee=%q", announced.Assignee)
+	}
+	if announced.IsBlocked == nil || *announced.IsBlocked {
+		t.Fatalf("bead.updated payload IsBlocked = %v, want &false retained from cache", announced.IsBlocked)
+	}
 }

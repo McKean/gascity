@@ -804,8 +804,8 @@ type cacheNotification struct {
 // cacheFullyPrimed gates bead.created alone: while the cache is still partial
 // the absence of a cached row proves nothing about whether the bead is new, and
 // announcing on absence would turn the first live read after a restart into a
-// bead.created per unprimed row. bead.updated and bead.closed need no such gate
-// need no such gate: both require a cached row, which is itself a prior
+// bead.created per unprimed row. bead.updated and bead.closed need no such gate:
+// both require a cached row, which is itself a prior
 // observation.
 func refreshAbsorbNotification(cached Bead, cachedExists bool, fresh Bead, cacheFullyPrimed bool) string {
 	if !cachedExists {
