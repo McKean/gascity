@@ -301,18 +301,37 @@ func (c *CachingStore) cacheServableForListQueryLocked(query ListQuery) bool {
 	return slices.Contains(partialPrimeStatuses, query.Status)
 }
 
+// refreshWorkSet is the backing-store state refreshCachedBeads gathers before
+// taking the write lock: the rows the live list returned, plus the per-ID Get
+// results for cached rows that list did not cover.
+type refreshWorkSet struct {
+	items                []Bead
+	refreshedParents     map[string]Bead
+	removedParents       map[string]struct{}
+	refreshedLiveMissing map[string]Bead
+	removedLiveMissing   map[string]struct{}
+}
+
+func (w refreshWorkSet) empty() bool {
+	return len(w.items) == 0 && len(w.refreshedParents) == 0 && len(w.removedParents) == 0 &&
+		len(w.refreshedLiveMissing) == 0 && len(w.removedLiveMissing) == 0
+}
+
 func (c *CachingStore) refreshCachedBeads(query ListQuery, startSeq uint64, items []Bead) []Bead {
-	refreshedParents := make(map[string]Bead)
-	removedParents := make(map[string]struct{})
-	refreshedLiveMissing := make(map[string]Bead)
-	removedLiveMissing := make(map[string]struct{})
+	ws := refreshWorkSet{
+		items:                items,
+		refreshedParents:     make(map[string]Bead),
+		removedParents:       make(map[string]struct{}),
+		refreshedLiveMissing: make(map[string]Bead),
+		removedLiveMissing:   make(map[string]struct{}),
+	}
 	for _, id := range c.staleParentCacheIDs(query.ParentID, items) {
 		fresh, err := c.backing.Get(id)
 		switch {
 		case err == nil:
-			refreshedParents[id] = cloneBead(fresh)
+			ws.refreshedParents[id] = cloneBead(fresh)
 		case errors.Is(err, ErrNotFound):
-			removedParents[id] = struct{}{}
+			ws.removedParents[id] = struct{}{}
 		default:
 			c.recordProblem("refresh parent cache during list", fmt.Errorf("%s: %w", id, err))
 		}
@@ -321,25 +340,78 @@ func (c *CachingStore) refreshCachedBeads(query ListQuery, startSeq uint64, item
 		fresh, err := c.backing.Get(id)
 		switch {
 		case err == nil:
-			refreshedLiveMissing[id] = cloneBead(fresh)
+			ws.refreshedLiveMissing[id] = cloneBead(fresh)
 		case errors.Is(err, ErrNotFound):
-			removedLiveMissing[id] = struct{}{}
+			ws.removedLiveMissing[id] = struct{}{}
 		default:
 			c.recordProblem("refresh live cache during list", fmt.Errorf("%s: %w", id, err))
 		}
 	}
-	if len(items) == 0 && len(refreshedParents) == 0 && len(removedParents) == 0 &&
-		len(refreshedLiveMissing) == 0 && len(removedLiveMissing) == 0 {
+	if ws.empty() {
 		return items
 	}
+	refreshed, notifications := c.applyRefreshWorkSetLocked(query, startSeq, ws)
+	// Emitted after the write lock is released: onChange is a caller-supplied
+	// callback (the controller records an event from it) and must never run
+	// under c.mu, the same discipline runReconciliation follows.
+	c.notifyChanges(notifications)
+	return refreshed
+}
+
+// applyRefreshWorkSetLocked installs a live read's backing state into the cache
+// and returns both the rows the read should serve and the transitions the read
+// observed. It takes c.mu itself.
+//
+// Announcing here is what keeps a foreign write from vanishing: a `bd` close
+// or route written straight against Dolt fires no gc event and no cache
+// notification. The reconcile pass is the documented synthesizer of those
+// events, but it synthesizes them from the diff between the cache and the
+// backing store, and a live read that absorbs first consumes that diff: the
+// next pass compares fresh against a cache that already agrees and emits
+// nothing. Worse for a close, because the cached row is closed by then and
+// mergeSnapshotLocked's eviction arm suppresses bead.closed for an
+// already-closed cached row, so the close never reaches the stream at all
+// (gt-48f: a refinery close and a reviewer route stayed invisible for hours on
+// a live city, and surfaced only when a pass happened to win the race).
+//
+// Whichever observer sees the change first announces it, and only one of them
+// can: after this absorbs, the reconcile diff is empty; if the pass wins
+// instead, this read finds cache and backing already in agreement and stays
+// quiet. refreshAbsorbNotification holds the shared classification so the two
+// observers cannot drift.
+func (c *CachingStore) applyRefreshWorkSetLocked(query ListQuery, startSeq uint64, ws refreshWorkSet) ([]Bead, []cacheNotification) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.state != cacheLive && c.state != cachePartial {
-		return items
+		return ws.items, nil
 	}
+	fullyPrimed := c.state == cacheLive
 	now := time.Now()
-	refreshed := make([]Bead, 0, len(items))
-	for _, item := range items {
+	var notifications []cacheNotification
+	// Must run BEFORE the absorb: it classifies against the cached row the
+	// absorb is about to replace, and reads the dependency set the absorb is
+	// about to keep.
+	announceAbsorb := func(id string, fresh Bead) {
+		cached, cachedExists := c.beads[id]
+		if eventType := refreshAbsorbNotification(cached, cachedExists, fresh, fullyPrimed); eventType != "" {
+			notifications = append(notifications, cacheNotification{
+				eventType: eventType,
+				bead:      c.announcedBeadLocked(id, fresh),
+			})
+		}
+	}
+	announceEvict := func(id string) {
+		cached, ok := c.beads[id]
+		if !ok {
+			return
+		}
+		if n, emit := refreshEvictNotification(cached); emit {
+			notifications = append(notifications, n)
+		}
+	}
+
+	refreshed := make([]Bead, 0, len(ws.items))
+	for _, item := range ws.items {
 		if c.deletedSeq[item.ID] > startSeq {
 			continue
 		}
@@ -362,6 +434,7 @@ func (c *CachingStore) refreshCachedBeads(query ListQuery, startSeq uint64, item
 				continue
 			}
 		}
+		announceAbsorb(item.ID, item)
 		c.absorbFreshLocked(item.ID, item, now, absorbOpts{
 			depsMode:   depsFromFieldsIfCarried,
 			seqMode:    seqClearGuarded,
@@ -371,53 +444,84 @@ func (c *CachingStore) refreshCachedBeads(query ListQuery, startSeq uint64, item
 			refreshed = append(refreshed, cloneBead(item))
 		}
 	}
-	for id, bead := range refreshedParents {
+	for id, bead := range ws.refreshedParents {
 		if c.deletedSeq[id] > startSeq || c.beadSeq[id] > startSeq {
 			continue
 		}
 		if _, keep := c.recentLocalBeadConflictLocked(id, bead, now, false); keep {
 			continue
 		}
+		announceAbsorb(id, bead)
 		c.absorbFreshLocked(id, bead, now, absorbOpts{
 			depsMode:   depsFromFieldsIfCarried,
 			seqMode:    seqClearGuarded,
 			clearDirty: true,
 		})
 	}
-	for id := range removedParents {
+	for id := range ws.removedParents {
 		if c.deletedSeq[id] > startSeq || c.beadSeq[id] > startSeq {
 			continue
 		}
 		if current, ok := c.beads[id]; ok && current.Status != "closed" && recentLocalMutation(c.localBeadAt[id], now) {
 			continue
 		}
+		announceEvict(id)
 		c.evictLocked(id)
 	}
-	for id, bead := range refreshedLiveMissing {
+	for id, bead := range ws.refreshedLiveMissing {
 		if c.deletedSeq[id] > startSeq || c.beadSeq[id] > startSeq {
 			continue
 		}
 		if _, keep := c.recentLocalBeadConflictLocked(id, bead, now, false); keep {
 			continue
 		}
+		announceAbsorb(id, bead)
 		c.absorbFreshLocked(id, bead, now, absorbOpts{
 			depsMode:   depsFromFieldsIfCarried,
 			seqMode:    seqClearGuarded,
 			clearDirty: true,
 		})
 	}
-	for id := range removedLiveMissing {
+	for id := range ws.removedLiveMissing {
 		if c.deletedSeq[id] > startSeq || c.beadSeq[id] > startSeq {
 			continue
 		}
 		if current, ok := c.beads[id]; ok && current.Status != "closed" && recentLocalMutation(c.localBeadAt[id], now) {
 			continue
 		}
+		announceEvict(id)
 		c.evictLocked(id)
 	}
 	c.markFreshLocked(time.Now())
 	c.updateStatsLocked()
-	return refreshed
+	return refreshed, notifications
+}
+
+// announcedBeadLocked builds the payload for a read-path emission: the fresh
+// row, with the cache's dependency set filled in when the row carries none.
+//
+// The controller feeds a cache emission straight back into the cache through
+// ApplyEventSnapshot, which takes the payload's dependency set as authoritative
+// coverage. A live list row need not carry dependency fields, and the absorb's
+// depsFromFieldsIfCarried keeps the cached set in exactly that case, so
+// announcing the bare row would assert an empty dependency set the absorb never
+// installed and wipe live edges out of the cache. That is the ga-yoix1 failure
+// mode: the cleared coverage fences the row out of the next reconcile pass, and
+// the pass after that reads the cleared state as a change and emits again.
+//
+// Filling from c.deps makes the payload describe the state the absorb leaves
+// behind, which is what an authoritative snapshot has to mean. Caller must hold
+// c.mu and call this BEFORE the absorb, while c.deps still holds the set the
+// absorb is about to keep.
+func (c *CachingStore) announcedBeadLocked(id string, fresh Bead) Bead {
+	b := cloneBead(fresh)
+	if beadCarriesDependencyFields(b) {
+		return b
+	}
+	if cachedDeps, ok := c.deps[id]; ok && len(cachedDeps) > 0 {
+		b.Dependencies = cloneDeps(cachedDeps)
+	}
+	return b
 }
 
 func (c *CachingStore) staleParentCacheIDs(parentID string, fresh []Bead) []string {
@@ -531,6 +635,12 @@ func (c *CachingStore) Get(id string) (Bead, error) {
 				c.mu.Unlock()
 				return Bead{}, ErrNotFound
 			}
+			// Absorbs without announcing, unlike the live-list refresh above.
+			// This arm is reached only for a DIRTY id, and dirty is set solely
+			// by a local write whose post-write Get failed, a write that has
+			// already emitted its own bead.updated (CachingStore.Update) or had
+			// no cached row to emit from. Confirming it here repairs this
+			// process's own write; announcing again would duplicate the event.
 			c.absorbFreshLocked(id, fresh, time.Now(), absorbOpts{
 				depsMode:   depsFromFields,
 				seqMode:    seqClearBeadSeqOnly,

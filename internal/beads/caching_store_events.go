@@ -784,6 +784,61 @@ type cacheNotification struct {
 	bead      Bead
 }
 
+// refreshAbsorbNotification classifies what a read-through refresh must
+// announce when it absorbs fresh, the way reconcileMergeDecision classifies
+// what a reconcile pass announces. It returns "" when the absorb is not a
+// transition worth an event.
+//
+// The read paths are the cache's other observer of foreign backing writes, and
+// whichever observer sees a change first is the only one that can announce it:
+// once the row is absorbed the reconcile diff is empty (gt-48f). So this has to
+// agree with reconcileMergeDecision, including that an open row going closed is
+// bead.closed and not bead.updated. The reconciler reaches that verdict via
+// its eviction arm, because its active-only scan never carries a closed row.
+//
+// skipLabels is pinned true to match the reconcile scan (cacheFullScanQuery
+// sets SkipLabels), which is what most cached rows were absorbed from. A live
+// list that does carry labels would otherwise read as changed on the label
+// field alone and announce a transition that never happened.
+//
+// cacheFullyPrimed gates bead.created alone: while the cache is still partial
+// the absence of a cached row proves nothing about whether the bead is new, and
+// announcing on absence would turn the first live read after a restart into a
+// bead.created per unprimed row. bead.updated and bead.closed need no such gate
+// need no such gate: both require a cached row, which is itself a prior
+// observation.
+func refreshAbsorbNotification(cached Bead, cachedExists bool, fresh Bead, cacheFullyPrimed bool) string {
+	if !cachedExists {
+		// A closed row the cache never held is history the read happens to walk
+		// past, not news.
+		if !cacheFullyPrimed || fresh.Status == "closed" {
+			return ""
+		}
+		return "bead.created"
+	}
+	if !beadChanged(cached, fresh, true) {
+		return ""
+	}
+	if cached.Status != "closed" && fresh.Status == "closed" {
+		return "bead.closed"
+	}
+	return "bead.updated"
+}
+
+// refreshEvictNotification is the eviction-arm counterpart of
+// refreshAbsorbNotification: a cached row the backing store no longer has is a
+// close, and the payload is the cached row with the close applied: the same
+// synthesis mergeSnapshotLocked performs. Returns ok=false when the cached row
+// was already closed and its close was therefore already announced.
+func refreshEvictNotification(cached Bead) (cacheNotification, bool) {
+	if cached.Status == "closed" {
+		return cacheNotification{}, false
+	}
+	closed := cloneBead(cached)
+	setBeadStatus(&closed, "closed")
+	return cacheNotification{eventType: "bead.closed", bead: closed}, true
+}
+
 func (c *CachingStore) notifyChanges(notifications []cacheNotification) {
 	for _, notification := range notifications {
 		c.notifyChange(notification.eventType, notification.bead)
